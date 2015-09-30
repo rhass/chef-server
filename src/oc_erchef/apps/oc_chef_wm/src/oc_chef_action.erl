@@ -163,11 +163,12 @@ routing_key(EntityType, Method) ->
 -spec publish(RoutingKey :: binary(),
               Msg :: binary()) -> ok.
 publish(RoutingKey, Msg)->
-    case chef_wm_actions_queue_monitoring:is_queue_writable() of
+    case chef_wm_actions_queue_monitoring:is_queue_at_capacity() of
         true ->
             lager:info("ANALYTICS QUEUE WRITABLE"),
-          oc_chef_action_queue:publish(RoutingKey, Msg);
+            oc_chef_action_queue:publish(RoutingKey, Msg);
         false ->
+            oc_chef_action_queue:message_dropped(),
             lager:info("Analytics queue non-writable")
     end.
 

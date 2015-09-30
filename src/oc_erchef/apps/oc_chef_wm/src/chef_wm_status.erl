@@ -61,9 +61,11 @@ check_health() ->
     Status = overall_status(Pings),
     log_failure(Status, Pings),
     KeyGen = chef_keygen_cache:status_for_json(),
+    AnalyticsQ = chef_wm_actions_queue_monitoring:status(),
     {Status, chef_json:encode({[{<<"status">>, ?A2B(Status)},
                                 {<<"upstreams">>, {Pings}},
-                                {<<"keygen">>, {KeyGen} }
+                                {<<"keygen">>, {KeyGen} },
+                                {<<"analytics_queue">>, {AnalyticsQ}}
                                ]})}.
 
 overall_status(Pings) ->
