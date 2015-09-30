@@ -125,6 +125,8 @@ default['private_chef']['rabbitmq']['management_enabled'] = true
 
 default['private_chef']['rabbitmq']['queue_length_monitor_enabled'] = true
 default['private_chef']['rabbitmq']['queue_length_monitor_millis'] = 5000
+# don't send messages to rabbitmq if it has reached it's configured max_length
+default['private_chef']['rabbitmq']['drop_on_full_capacity'] = true
 
 ####
 # External RabbitMQ

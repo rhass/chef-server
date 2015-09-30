@@ -146,12 +146,11 @@ check_current_queue_state(State) ->
                      Ratio = CurrentLength / MaxLength,
                      case Ratio >= 0.8 of
                          true -> Pcnt = round(Ratio * 100.0),
-                                 lager:warning("Queue capacity at ~p%",
-                                               [Pcnt]);
+                                 lager:warning("RabbitMQ capacity at ~p%", [Pcnt]);
                          false -> ok
                      end,
                      case QueueAtCapacity of
-                         true -> lager:warning("Dropped ~p messages due to queue limit exceeded",
+                         true -> lager:warning("Dropped ~p messages since last check due to queue limit exceeded",
                                                [State#state.dropped_since_last_check]);
                          false -> ok
                      end,
@@ -172,7 +171,7 @@ rabbit_mgmt_server_request(Path) ->
                      [], get, [], [{basic_auth, {binary_to_list(User),
                                                  binary_to_list(Password)}}]).
 
-
+-spec get_max_length() -> integer() | undefined.
 get_max_length() ->
     MaxResult = rabbit_mgmt_server_request("/api/policies/%2Fanalytics/max_length"),
     case MaxResult of
@@ -180,7 +179,7 @@ get_max_length() ->
             try
                 parse_max_length_response(MaxLengthJson)
             catch _Ex:_Type ->
-                      lager:error("Invalid RabbitMQ response")
+                      lager:error("Invalid RabbitMQ response while getting queue max length")
             end;
         {error, {conn_failed,_}} ->
             lager:info("Can't connect to RabbitMQ management console"),
@@ -193,38 +192,39 @@ get_max_length() ->
 
     end.
 
+-spec get_current_length() -> integer() | undefined.
 get_current_length() ->
     CurrentResult = rabbit_mgmt_server_request("/api/queues/%2Fanalytics"),
     case CurrentResult of
         {error, {conn_failed,_}} ->
-            % this is a lager:debug so it won't print out every time the timer
-            % fires
             lager:info("Can't connect to RabbitMQ management console"),
             undefined;
         {ok, "200", _, CurrentStatusJson} ->
             try
                 parse_current_length_response(CurrentStatusJson)
             catch _:_ ->
-                      lager:error("Invalid RabbitMQ response")
+                      lager:error("Invalid RabbitMQ response while getting queue length")
             end;
         _Resp -> lager:error("Unknown response from RabbitMQ management console"),
                  undefined
     end.
 
+-spec parse_current_length_response(binary()) -> integer() | undefined.
 parse_current_length_response(Message) ->
     CurrentJSON = jiffy:decode(Message),
-
     % make a proplists of each queue and it's current length
     QueueLengths =
     lists:map(fun (QueueStats) -> {QS} = QueueStats,
                                     {proplists:get_value(<<"name">>, QS),
                                     proplists:get_value(<<"messages">>, QS)}
                 end, CurrentJSON),
-    %%lager:info("Qs ~p", [QueueLengths]),
     % look for the alaska queue length
     proplists:get_value(<<"alaska">>, QueueLengths, undefined).
 
+
+-spec parse_max_length_response(binary()) -> integer() | undefined.
 parse_max_length_response(Message) ->
     {MaxLengthPolicy} = jiffy:decode(Message),
     {Defs} = proplists:get_value(<<"definition">>, MaxLengthPolicy),
     proplists:get_value(<<"max-length">>, Defs, undefined).
+

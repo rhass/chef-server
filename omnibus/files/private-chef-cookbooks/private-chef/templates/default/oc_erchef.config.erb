@@ -108,6 +108,7 @@
               {rabbitmq_management_password, <<"<%= @node['private_chef']['rabbitmq']['management_password'] %>">>},
               {rabbitmq_queue_length_monitor_enabled, <%= @node['private_chef']['rabbitmq']['queue_length_monitor_enabled'] %>},
               {rabbitmq_queue_length_monitor_millis, <%= @node['private_chef']['rabbitmq']['queue_length_monitor_millis'] %> },
+              {rabbitmq_drop_on_full_capacity, <%=  @node['private_chef']['rabbitmq']['drop_on_full_capacity']  %> },
               {max_request_size, <%= node['private_chef']['opscode-erchef']['max_request_size'] %>},
               {server_version, "<%= node['private_chef']['version'] %>"},
               {health_ping_timeout, 400},
