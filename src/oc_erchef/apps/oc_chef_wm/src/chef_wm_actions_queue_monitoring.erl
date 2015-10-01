@@ -113,7 +113,7 @@ handle_cast(_Msg, State) ->
 
 
 handle_info(status_ping, State) ->
-    lager:debug("Checking server status"),
+    lager:debug("Checking RabbitMQ status"),
     check_current_queue_state(State);
 
 handle_info(_Info, State) ->
@@ -131,9 +131,9 @@ code_change(_OldVsn, State, _Extra) ->
 
 check_current_queue_state(State) ->
     case get_max_length() of
-        % max length isn't configured, or something is broken
-        % don't continue.
         undefined -> {noreply, State};
+                     % max length isn't configured, or something is broken
+                     % don't continue.
         MaxLength ->
             lager:info("Max Length = ~p", [MaxLength]),
             CurrentLength = get_current_length(),
@@ -179,7 +179,8 @@ get_max_length() ->
             try
                 parse_max_length_response(MaxLengthJson)
             catch _Ex:_Type ->
-                      lager:error("Invalid RabbitMQ response while getting queue max length")
+                      lager:error("Invalid RabbitMQ response while getting queue max length"),
+                      undefined
             end;
         {error, {conn_failed,_}} ->
             lager:info("Can't connect to RabbitMQ management console"),
@@ -203,7 +204,8 @@ get_current_length() ->
             try
                 parse_current_length_response(CurrentStatusJson)
             catch _:_ ->
-                      lager:error("Invalid RabbitMQ response while getting queue length")
+                      lager:error("Invalid RabbitMQ response while getting queue length"),
+                      undefined
             end;
         _Resp -> lager:error("Unknown response from RabbitMQ management console"),
                  undefined
