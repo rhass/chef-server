@@ -65,14 +65,25 @@ status() ->
 is_queue_at_capacity() ->
     gen_server:call(?SERVER, is_queue_at_capacity).
 
-override_queue_at_capacity(AtCapacity) ->
-    gen_server:call(?SERVER, {override_queue_at_capacity, AtCapacity}).
-
 message_dropped() ->
     gen_server:call(?SERVER, message_dropped).
 
 check_current_state() ->
     gen_server:call(?SERVER, check_current_state).
+
+
+override_queue_at_capacity(AtCapacity) ->
+    gen_server:call(?SERVER, {override_queue_at_capacity, AtCapacity}).
+
+
+start_timer() ->
+    gen_server:call(?SERVER, start_timer).
+
+
+stop_timer() ->
+    gen_server:call(?SERVER, stop_timer).
+
+%% Pool functions --------------------------------------------
 
 create_pool() ->
     Pools = get_pool_configs(),
@@ -91,11 +102,9 @@ get_pool_configs() ->
 %%-------------------------------------------------------------
 
 init([]) ->
-    %Interval = envy:get(oc_chef_wm, rabbitmq_queue_length_monitor_millis, pos_integer),
-    %{ok, TRef} = timer:send_interval(Interval, status_ping),
-    %{ok, #state{timer=TRef}}.
-    lager:error("TIMER NOT ENABLED"),
-    {ok, #state{}}.
+    Interval = envy:get(oc_chef_wm, rabbitmq_queue_length_monitor_millis, pos_integer),
+    {ok, TRef} = timer:send_interval(Interval, status_ping),
+    {ok, #state{timer=TRef}}.
 
 handle_call(is_queue_at_capacity, _From, #state{queue_at_capacity =
                                                 QueueAtCapacity} = State) ->
@@ -157,7 +166,7 @@ check_current_queue_state(State) ->
             CurrentLength = get_current_length(),
             case CurrentLength of
                 undefined ->
-                    lager:info("No messages on queue"),
+                    lager:info("No queue bound to exchange"),
                     State#state{dropped_since_last_check = 0}; % no messages on the queue
                 N -> lager:info("Current Length = ~p", [N]),
                      QueueAtCapacity = CurrentLength == MaxLength,
@@ -209,7 +218,6 @@ get_max_length() ->
 -spec get_current_length() -> integer() | undefined.
 get_current_length() ->
     CurrentResult = rabbit_mgmt_server_request("/api/queues/%2Fanalytics"),
-    lager:info("Current length ~p", [CurrentResult]),
     case CurrentResult of
         {error, {conn_failed,_}} ->
             lager:info("Can't connect to RabbitMQ management console"),
