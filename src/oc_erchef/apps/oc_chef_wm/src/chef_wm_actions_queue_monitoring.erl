@@ -35,10 +35,12 @@
          terminate/2,
          code_change/3,
          status/0,
-         status_for_json/0,
          is_queue_at_capacity/0,
          override_queue_at_capacity/1,
-         message_dropped/0
+         check_current_state/0,
+         message_dropped/0,
+         create_pool/0,
+         delete_pool/0
         ]).
 
 -behaviour(gen_server).
@@ -60,9 +62,6 @@ start_link() ->
 status() ->
     gen_server:call(?SERVER, status).
 
-status_for_json() ->
-    gen_server:call(?SERVER, status_for_json).
-
 is_queue_at_capacity() ->
     gen_server:call(?SERVER, is_queue_at_capacity).
 
@@ -72,12 +71,31 @@ override_queue_at_capacity(AtCapacity) ->
 message_dropped() ->
     gen_server:call(?SERVER, message_dropped).
 
+check_current_state() ->
+    gen_server:call(?SERVER, check_current_state).
+
+create_pool() ->
+    Pools = get_pool_configs(),
+    [oc_httpc:add_pool(PoolNameAtom, Config) || {PoolNameAtom, Config} <- Pools],
+    ok.
+
+delete_pool() ->
+    Pools = get_pool_configs(),
+    [ok = oc_httpc:delete_pool(PoolNameAtom) || {PoolNameAtom, _Config} <- Pools],
+    ok.
+
+get_pool_configs() ->
+    Config = envy:get(oc_chef_wm, rabbitmq_management_service, [], any),
+    [{?MODULE, Config}].
+
 %%-------------------------------------------------------------
 
 init([]) ->
-    Interval = envy:get(oc_chef_wm, rabbitmq_queue_length_monitor_millis, pos_integer),
-    {ok, TRef} = timer:send_interval(Interval, status_ping),
-    {ok, #state{timer=TRef}}.
+    %Interval = envy:get(oc_chef_wm, rabbitmq_queue_length_monitor_millis, pos_integer),
+    %{ok, TRef} = timer:send_interval(Interval, status_ping),
+    %{ok, #state{timer=TRef}}.
+    lager:error("TIMER NOT ENABLED"),
+    {ok, #state{}}.
 
 handle_call(is_queue_at_capacity, _From, #state{queue_at_capacity =
                                                 QueueAtCapacity} = State) ->
@@ -103,8 +121,8 @@ handle_call(status, _From, #state{queue_at_capacity = QAC,
              {last_recorded_length, LL},
              {total_dropped, Total}],
     {reply, Stats, State};
-handle_call(status_for_json, _From, State) ->
-    {reply, ok, State};
+handle_call(check_current_state, _From, State) ->
+    {reply, ok, check_current_queue_state(State)};
 handle_call(_Request, _From, State) ->
     {reply, ignored, State}.
 
@@ -114,7 +132,7 @@ handle_cast(_Msg, State) ->
 
 handle_info(status_ping, State) ->
     lager:debug("Checking RabbitMQ status"),
-    check_current_queue_state(State);
+    {noreply, check_current_queue_state(State)};
 
 handle_info(_Info, State) ->
     {noreply, State}.
@@ -128,7 +146,7 @@ code_change(_OldVsn, State, _Extra) ->
 
 
 %%-------------------------------------------------------------
-
+-spec check_current_queue_state(#state{}) -> #state{}.
 check_current_queue_state(State) ->
     case get_max_length() of
         undefined -> {noreply, State};
@@ -140,7 +158,7 @@ check_current_queue_state(State) ->
             case CurrentLength of
                 undefined ->
                     lager:info("No messages on queue"),
-                    {noreply, State#state{dropped_since_last_check = 0}}; % no messages on the queue
+                    State#state{dropped_since_last_check = 0}; % no messages on the queue
                 N -> lager:info("Current Length = ~p", [N]),
                      QueueAtCapacity = CurrentLength == MaxLength,
                      Ratio = CurrentLength / MaxLength,
@@ -154,10 +172,10 @@ check_current_queue_state(State) ->
                                                [State#state.dropped_since_last_check]);
                          false -> ok
                      end,
-                     {noreply, State#state{max_length = MaxLength,
+                     State#state{max_length = MaxLength,
                                            last_recorded_length = N,
                                            dropped_since_last_check = 0,
-                                           queue_at_capacity = QueueAtCapacity}}
+                                           queue_at_capacity = QueueAtCapacity}
             end
     end.
 
@@ -176,12 +194,7 @@ get_max_length() ->
     MaxResult = rabbit_mgmt_server_request("/api/policies/%2Fanalytics/max_length"),
     case MaxResult of
         {ok, "200", _, MaxLengthJson} ->
-            try
-                parse_max_length_response(MaxLengthJson)
-            catch _Ex:_Type ->
-                      lager:error("Invalid RabbitMQ response while getting queue max length"),
-                      undefined
-            end;
+            parse_max_length_response(MaxLengthJson);
         {error, {conn_failed,_}} ->
             lager:info("Can't connect to RabbitMQ management console"),
             undefined;
@@ -196,37 +209,44 @@ get_max_length() ->
 -spec get_current_length() -> integer() | undefined.
 get_current_length() ->
     CurrentResult = rabbit_mgmt_server_request("/api/queues/%2Fanalytics"),
+    lager:info("Current length ~p", [CurrentResult]),
     case CurrentResult of
         {error, {conn_failed,_}} ->
             lager:info("Can't connect to RabbitMQ management console"),
             undefined;
         {ok, "200", _, CurrentStatusJson} ->
-            try
-                parse_current_length_response(CurrentStatusJson)
-            catch _:_ ->
-                      lager:error("Invalid RabbitMQ response while getting queue length"),
-                      undefined
-            end;
+            parse_current_length_response(CurrentStatusJson);
         _Resp -> lager:error("Unknown response from RabbitMQ management console"),
                  undefined
     end.
 
 -spec parse_current_length_response(binary()) -> integer() | undefined.
 parse_current_length_response(Message) ->
-    CurrentJSON = jiffy:decode(Message),
-    % make a proplists of each queue and it's current length
-    QueueLengths =
-    lists:map(fun (QueueStats) -> {QS} = QueueStats,
-                                    {proplists:get_value(<<"name">>, QS),
-                                    proplists:get_value(<<"messages">>, QS)}
-                end, CurrentJSON),
-    % look for the alaska queue length
-    proplists:get_value(<<"alaska">>, QueueLengths, undefined).
+    try
+        CurrentJSON = jiffy:decode(Message),
+        % make a proplists of each queue and it's current length
+        QueueLengths =
+            lists:map(fun (QueueStats) -> {QS} = QueueStats,
+                                        {proplists:get_value(<<"name">>, QS),
+                                        proplists:get_value(<<"messages">>, QS)}
+                    end, CurrentJSON),
+        % look for the alaska queue length
+        proplists:get_value(<<"alaska">>, QueueLengths, undefined)
+    catch
+        _:_ -> lager:error("Invalid RabbitMQ response while getting queue length"),
+               undefined
+    end.
 
 
 -spec parse_max_length_response(binary()) -> integer() | undefined.
 parse_max_length_response(Message) ->
-    {MaxLengthPolicy} = jiffy:decode(Message),
-    {Defs} = proplists:get_value(<<"definition">>, MaxLengthPolicy),
-    proplists:get_value(<<"max-length">>, Defs, undefined).
+    try
+        {MaxLengthPolicy} = jiffy:decode(Message),
+        {Defs} = proplists:get_value(<<"definition">>, MaxLengthPolicy),
+        proplists:get_value(<<"max-length">>, Defs, undefined)
+    catch
+        _:_ ->
+            lager:error("Invalid RabbitMQ response while getting queue max length"),
+            undefined
+    end.
 

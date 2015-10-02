@@ -109,6 +109,18 @@
               {rabbitmq_queue_length_monitor_enabled, <%= @node['private_chef']['rabbitmq']['queue_length_monitor_enabled'] %>},
               {rabbitmq_queue_length_monitor_millis, <%= @node['private_chef']['rabbitmq']['queue_length_monitor_millis'] %> },
               {rabbitmq_drop_on_full_capacity, <%=  @node['private_chef']['rabbitmq']['drop_on_full_capacity']  %> },
+
+              {rabbitmq_management_service,
+                [{root_url, "http://<%= @actions_vip %>:<%= @node['private_chef']['rabbitmq']['management_port'] %>/api"},
+                                    {timeout, <%= @node['private_chef']['rabbitmq']['rabbit_mgmt_timeout'] %>},
+                                    {init_count, <%= @node['private_chef']['rabbitmq']['rabbit_mgmt_http_init_count'] %>},
+                                    {max_count, <%= @node['private_chef']['rabbitmq']['rabbit_mgmt_http_max_count'] %>},
+                                    {cull_interval, <%= @node['private_chef']['rabbitmq']['rabbit_mgmt_http_cull_interval'] %>},
+                                    {max_age, <%= @node['private_chef']['rabbitmq']['rabbit_mgmt_http_max_age'] %>},
+                                    {max_connection_duration, <%= @node['private_chef']['rabbitmq']['rabbit_mgmt_http_max_connection_duration'] %>},
+                                    {ibrowse_options, <%= @node['private_chef']['rabbitmq']['rabbit_mgmt_ibrowse_options'] %>}
+
+                 ]},
               {max_request_size, <%= node['private_chef']['opscode-erchef']['max_request_size'] %>},
               {server_version, "<%= node['private_chef']['version'] %>"},
               {health_ping_timeout, 400},

@@ -128,6 +128,16 @@ default['private_chef']['rabbitmq']['queue_length_monitor_millis'] = 5000
 # don't send messages to rabbitmq if it has reached it's configured max_length
 default['private_chef']['rabbitmq']['drop_on_full_capacity'] = true
 
+# rabbit_mgmt_service configuration for erchef. These are used to configure an opscoderl_httpc pool
+# of HTTP connecton workers.
+default['private_chef']['rabbitmq']['rabbit_mgmt_timeout'] = 30000
+default['private_chef']['rabbitmq']['rabbit_mgmt_http_init_count'] = 25
+default['private_chef']['rabbitmq']['rabbit_mgmt_http_max_count'] = 100
+default['private_chef']['rabbitmq']['rabbit_mgmt_http_cull_interval'] = "{1, min}"
+default['private_chef']['rabbitmq']['rabbit_mgmt_http_max_age'] = "{70, sec}"
+default['private_chef']['rabbitmq']['rabbit_mgmt_http_max_connection_duration'] = "{70,sec}"
+default['private_chef']['rabbitmq']['rabbit_mgmt_ibrowse_options'] = "[{connect_timeout, 10000}]"
+
 ####
 # External RabbitMQ
 ####
