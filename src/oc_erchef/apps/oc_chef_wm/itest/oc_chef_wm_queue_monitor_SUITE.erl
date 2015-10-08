@@ -43,7 +43,12 @@
                         {last_recorded_length,0},
                         {total_dropped,0}] ).
 
+
+-define(ROUTING_KEY, <<"MyRoutingKey">>).
+-define(MESSAGE, <<"MyMessage">>).
+
 init_per_suite(Config) ->
+
     application:set_env(oc_chef_wm, rabbitmq_queue_length_monitor_millis, 10000),
     application:set_env(oc_chef_wm, rabbitmq_management_user, <<"foo">>),
     application:set_env(oc_chef_wm, actions_host, "localhost"),
@@ -69,7 +74,12 @@ all() ->
     drop_messages_no_overload,
     drop_messages_and_reset_no_overload,
     drop_messages_overload,
-    drop_messages_overload_and_reset
+    drop_messages_overload_and_reset,
+    check_publish_not_at_capacity,
+    check_publish_at_capacity,
+    check_publish_at_capacity_and_reset,
+    check_publish_at_capacity_no_drop,
+    no_queue_length_monitor
     ].
 
 init_per_testcase(_, Config) ->
@@ -88,7 +98,6 @@ max_length_json(Config) ->
 
 no_messages_json(Config) ->
     load_json(Config, "no_messages.json").
-
 
 some_message_json(Config) ->
     load_json(Config, "some_messages.json").
@@ -266,4 +275,156 @@ drop_messages_overload_and_reset(Config) ->
         = chef_wm_actions_queue_monitoring:status(),
     meck:unload(ibrowse),
     ok.
+
+%% ensure the publish function is called and no messages are dropped
+check_publish_not_at_capacity(_) ->
+    application:set_env(oc_chef_wm, rabbitmq_queue_length_monitor_enabled, true),
+    application:set_env(oc_chef_wm, rabbitmq_drop_on_full_capacity, true),
+    chef_wm_actions_queue_monitoring:start_link(),
+
+    meck:new(oc_chef_action_queue),
+    meck:expect(oc_chef_action_queue, publish, fun (_, _) -> ok end),
+
+    0 = meck:num_calls(oc_chef_action_queue, publish, [?ROUTING_KEY,?MESSAGE]),
+
+    oc_chef_action:publish(?ROUTING_KEY, ?MESSAGE),
+
+    1 = meck:num_calls(oc_chef_action_queue, publish, [?ROUTING_KEY,?MESSAGE]),
+
+    application:unset_env(oc_chef_wm, rabbitmq_queue_length_monitor_enabled),
+    meck:unload(oc_chef_action_queue),
+    ok.
+
+
+%% ensure the publish function is called and 1 message is dropped
+%% due to queue being at capacity
+check_publish_at_capacity(Config) ->
+    application:set_env(oc_chef_wm, rabbitmq_queue_length_monitor_enabled, true),
+    application:set_env(oc_chef_wm, rabbitmq_drop_on_full_capacity, true),
+    chef_wm_actions_queue_monitoring:start_link(),
+
+    meck_response("200", max_length_json(Config), "200", at_capacity_json(Config)),
+    %% ensure that the queue is at capacity before calling
+    %% oc_chef_action:publish
+    chef_wm_actions_queue_monitoring:check_current_state(),
+
+
+    meck:new(oc_chef_action_queue),
+    meck:expect(oc_chef_action_queue, publish, fun (_, _) -> ok end),
+
+    0 = meck:num_calls(oc_chef_action_queue, publish, [?ROUTING_KEY,?MESSAGE]),
+
+    oc_chef_action:publish(?ROUTING_KEY, ?MESSAGE),
+
+    %% NO messages have been published, 1 message should be logged as dropped
+    0 = meck:num_calls(oc_chef_action_queue, publish, [?ROUTING_KEY,?MESSAGE]),
+    Status = chef_wm_actions_queue_monitoring:status(),
+
+    1 = proplists:get_value(total_dropped, Status),
+    true = proplists:get_value(queue_at_capacity, Status),
+    99 = proplists:get_value(last_recorded_length, Status),
+
+    application:unset_env(oc_chef_wm, rabbitmq_queue_length_monitor_enabled),
+    meck:unload(oc_chef_action_queue),
+    meck:unload(ibrowse),
+    ok.
+
+%% ensure the publish function is called and 1 message is dropped
+%% due to queue being at capacity, reset queue length to 0
+%% and 1 message should be published
+check_publish_at_capacity_and_reset(Config) ->
+    application:set_env(oc_chef_wm, rabbitmq_queue_length_monitor_enabled, true),
+    application:set_env(oc_chef_wm, rabbitmq_drop_on_full_capacity, true),
+    chef_wm_actions_queue_monitoring:start_link(),
+
+    meck_response("200", max_length_json(Config), "200", at_capacity_json(Config)),
+    %% ensure that the queue is at capacity before calling
+    %% oc_chef_action:publish
+    chef_wm_actions_queue_monitoring:check_current_state(),
+
+
+    meck:new(oc_chef_action_queue),
+    meck:expect(oc_chef_action_queue, publish, fun (_, _) -> ok end),
+
+    0 = meck:num_calls(oc_chef_action_queue, publish, [?ROUTING_KEY,?MESSAGE]),
+
+    oc_chef_action:publish(?ROUTING_KEY, ?MESSAGE),
+
+    %% NO messages have been published
+    0 = meck:num_calls(oc_chef_action_queue, publish, [?ROUTING_KEY,?MESSAGE]),
+    Status = chef_wm_actions_queue_monitoring:status(),
+
+    1 = proplists:get_value(total_dropped, Status),
+    true = proplists:get_value(queue_at_capacity, Status),
+    99 = proplists:get_value(last_recorded_length, Status),
+
+
+
+    %% simulate the queue length going back down to 0
+    meck:unload(ibrowse),
+    meck_response("200",  max_length_json(Config), "200", no_messages_json(Config)),
+    chef_wm_actions_queue_monitoring:check_current_state(),
+
+    oc_chef_action:publish(?ROUTING_KEY, ?MESSAGE),
+
+    1 = meck:num_calls(oc_chef_action_queue, publish, [?ROUTING_KEY,?MESSAGE]),
+
+    UpdatedStatus = chef_wm_actions_queue_monitoring:status(),
+    1 = proplists:get_value(total_dropped, UpdatedStatus),
+    false = proplists:get_value(queue_at_capacity, UpdatedStatus),
+    0 = proplists:get_value(last_recorded_length, UpdatedStatus),
+
+    application:unset_env(oc_chef_wm, rabbitmq_queue_length_monitor_enabled),
+    meck:unload(oc_chef_action_queue),
+    meck:unload(ibrowse),
+    ok.
+
+
+% queue is at capacity, but don't drop messages due to configuration
+check_publish_at_capacity_no_drop(Config) ->
+    application:set_env(oc_chef_wm, rabbitmq_queue_length_monitor_enabled, true),
+    application:set_env(oc_chef_wm, rabbitmq_drop_on_full_capacity, false),
+
+    chef_wm_actions_queue_monitoring:start_link(),
+
+    meck_response("200", max_length_json(Config), "200", at_capacity_json(Config)),
+    %% ensure that the queue is at capacity before calling
+    %% oc_chef_action:publish
+    chef_wm_actions_queue_monitoring:check_current_state(),
+
+
+    meck:new(oc_chef_action_queue),
+    meck:expect(oc_chef_action_queue, publish, fun (_, _) -> ok end),
+
+    0 = meck:num_calls(oc_chef_action_queue, publish, [?ROUTING_KEY,?MESSAGE]),
+
+    oc_chef_action:publish(?ROUTING_KEY, ?MESSAGE),
+
+    %% rabbitmq_drop_on_full_capacity is false, so don't drop the message
+    1 = meck:num_calls(oc_chef_action_queue, publish, [?ROUTING_KEY,?MESSAGE]),
+
+    application:unset_env(oc_chef_wm, rabbitmq_queue_length_monitor_enabled),
+    meck:unload(oc_chef_action_queue),
+    meck:unload(ibrowse),
+    ok.
+
+% queue length monitor is disabled
+no_queue_length_monitor(_Config) ->
+    application:set_env(oc_chef_wm, rabbitmq_queue_length_monitor_enabled, false),
+    application:set_env(oc_chef_wm, rabbitmq_drop_on_full_capacity, false),
+
+    undefined = whereis(chef_wm_actions_queue_monitoring),
+    meck:new(oc_chef_action_queue),
+    meck:expect(oc_chef_action_queue, publish, fun (_, _) -> ok end),
+
+    0 = meck:num_calls(oc_chef_action_queue, publish, [?ROUTING_KEY,?MESSAGE]),
+
+    oc_chef_action:publish(?ROUTING_KEY, ?MESSAGE),
+
+    1 = meck:num_calls(oc_chef_action_queue, publish, [?ROUTING_KEY,?MESSAGE]),
+
+    application:unset_env(oc_chef_wm, rabbitmq_queue_length_monitor_enabled),
+    meck:unload(oc_chef_action_queue),
+    ok.
+
 
