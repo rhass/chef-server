@@ -27,7 +27,7 @@
 -compile(export_all).
 -endif.
 
--export([start_link/0]).
+-export([start_link/0, start_link_without_timer/0]).
 -export([init/1,
          handle_call/3,
          handle_cast/2,
@@ -47,7 +47,7 @@
 -define(SERVER, ?MODULE).
 
 -record(state, {queue_at_capacity = false,
-                timer,
+                timer = undefined,
                 max_length = 0,
                 last_recorded_length = 0,
                 dropped_since_last_check = 0,
@@ -57,6 +57,8 @@
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 
+start_link_without_timer() ->
+    gen_server:start_link({local, ?MODULE}, ?MODULE, [false], []).
 
 -spec status() -> [{atom(), _}].
 status() ->
@@ -75,13 +77,12 @@ check_current_state() ->
 override_queue_at_capacity(AtCapacity) ->
     gen_server:call(?SERVER, {override_queue_at_capacity, AtCapacity}).
 
-
-start_timer() ->
-    gen_server:call(?SERVER, start_timer).
-
-
-stop_timer() ->
-    gen_server:call(?SERVER, stop_timer).
+%start_timer() ->
+%    gen_server:call(?SERVER, start_timer).
+%
+%
+%stop_timer() ->
+%    gen_server:call(?SERVER, stop_timer).
 
 %% Pool functions --------------------------------------------
 
@@ -104,7 +105,10 @@ get_pool_configs() ->
 init([]) ->
     Interval = envy:get(oc_chef_wm, rabbitmq_queue_length_monitor_millis, pos_integer),
     {ok, TRef} = timer:send_interval(Interval, status_ping),
-    {ok, #state{timer=TRef}}.
+    {ok, #state{timer=TRef}};
+init([false]) ->
+    % start without a timer, used for testing
+    {ok, #state{}}.
 
 handle_call(is_queue_at_capacity, _From, #state{queue_at_capacity =
                                                 QueueAtCapacity} = State) ->
@@ -119,20 +123,17 @@ handle_call(message_dropped, _From, #state{total_dropped = TotalDropped,
   {reply, ok, State#state{total_dropped = TotalDropped + 1,
                           dropped_since_last_check = Dropped + 1}};
 
-handle_call(status, _From, #state{queue_at_capacity = QAC,
-                                  dropped_since_last_check = Dropped,
-                                  max_length = ML,
-                                  last_recorded_length = LL,
-                                  total_dropped = Total} = State) ->
-    Stats = [{queue_at_capacity,QAC},
-             {dropped_since_last_check, Dropped},
-             {max_length, ML},
-             {last_recorded_length, LL},
-             {total_dropped, Total}],
+handle_call(status, _From, State) ->
+    Stats = [{queue_at_capacity,State#state.queue_at_capacity},
+             {dropped_since_last_check, State#state.dropped_since_last_check},
+             {max_length, State#state.max_length},
+             {last_recorded_length, State#state.last_recorded_length},
+             {total_dropped, State#state.total_dropped}],
     {reply, Stats, State};
 handle_call(check_current_state, _From, State) ->
     {reply, ok, check_current_queue_state(State)};
-handle_call(_Request, _From, State) ->
+handle_call(Request, _From, State) ->
+    lager:error("Unknown request: ~p", [Request]),
     {reply, ignored, State}.
 
 handle_cast(_Msg, State) ->
@@ -146,6 +147,8 @@ handle_info(status_ping, State) ->
 handle_info(_Info, State) ->
     {noreply, State}.
 
+terminate(_Reason, #state{timer=undefined}) ->
+    ok;
 terminate(_Reason, #state{timer=Timer}) ->
     {ok, cancel} = timer:cancel(Timer),
     ok.
@@ -158,7 +161,7 @@ code_change(_OldVsn, State, _Extra) ->
 -spec check_current_queue_state(#state{}) -> #state{}.
 check_current_queue_state(State) ->
     case get_max_length() of
-        undefined -> {noreply, State};
+        undefined -> State;
                      % max length isn't configured, or something is broken
                      % don't continue.
         MaxLength ->
@@ -168,7 +171,8 @@ check_current_queue_state(State) ->
                 undefined ->
                     lager:info("No queue bound to exchange"),
                     State#state{dropped_since_last_check = 0}; % no messages on the queue
-                N -> lager:info("Current Length = ~p", [N]),
+                N ->
+                    lager:info("Current Length = ~p", [N]),
                      QueueAtCapacity = CurrentLength == MaxLength,
                      Ratio = CurrentLength / MaxLength,
                      case Ratio >= 0.8 of
